@@ -10,17 +10,26 @@ print(x_example.shape)
 
 train_dl = torch.utils.data.DataLoader(mnist_data_train, batch_size=100)
 
+def show_data(X, n=10, height=28, width=28, title=""):
+    plt.figure(figsize=(10, 3))
+    for i in range(n):
+        ax = plt.subplot(2,n,i+1)
+        plt.imshow(X[i].reshape((height,width)))
+        plt.gray()
+        ax.get_xaxis().set_visible(False)
+        ax.get_yaxis().set_visible(False)
+    plt.suptitle(title, fontsize = 20)
 class Encoder(nn.Module):
     def __init__(self, input_size = 28*28, hidden_size1 = 128, hidden_size2 =16, z_dim = 3):
         super().__init__()
         self.fc1 = nn.Linear(input_size, hidden_size1)
         self.fc2 = nn.Linear(hidden_size1, hidden_size2)
-        self.fc3 = nn.Linear(hidden_size2, z_dim)
+        self.fc3 = nn.Linear(hidden_size1, z_dim)
         self.relu = nn.ReLU()
 
     def forward(self, x):
         x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
+        # x = self.relu(self.fc2(x))
         x = self.fc3(x)
         return x
 
@@ -28,30 +37,31 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, output_size=28 * 28, hidden_size1=128, hidden_size2=16, z_dim=3):
         super().__init__()
-        self.fc1 = nn.Linear(z_dim, hidden_size2)
+        self.fc1 = nn.Linear(z_dim, hidden_size1)
         self.fc2 = nn.Linear(hidden_size2, hidden_size1)
         self.fc3 = nn.Linear(hidden_size1, output_size)
         self.relu = nn.ReLU()
 
     def forward(self, x):
         x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
+        # x = self.relu(self.fc2(x))
         x = torch.sigmoid(self.fc3(x))
         return x
 
 plt.imshow(x_example[0,:], cmap='gray')
 plt.show()
 
-enc = Encoder(28*28, 512, 128,5)
-dec = Decoder(28*28, 512, 128,5)
+enc = Encoder(28*28,256,100, 100)
+dec = Decoder(28*28, 256, 100, 100)
 
 loss_fn = nn.MSELoss()
+loss_fn = nn.BCELoss()
 optimizer_enc = torch.optim.Adam(enc.parameters(), lr=0.005)
 optimizer_dec = torch.optim.Adam(dec.parameters(), lr=0.005)
 
 
 train_loss = []
-for epoch in range(30):
+for epoch in range(20):
     train_epoch_loss = 0
     for (img, _) in train_dl:
         img2 = img.view(img.shape[0], -1)
@@ -73,3 +83,5 @@ gimg.resize(100, 28,28)
 plt.imshow(gimg[0])
 plt.plot(train_loss)
 plt.show()
+
+
