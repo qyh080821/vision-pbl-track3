@@ -1,3 +1,4 @@
+#https://github.com/rasbt/stat453-deep-learning-ss21/blob/main/L17/1_VAE_mnist_sigmoid_mse.ipynb
 import torch.utils.data
 import torch.nn as nn
 import torchvision
