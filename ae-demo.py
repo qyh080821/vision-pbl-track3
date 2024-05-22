@@ -49,6 +49,85 @@ class Decoder(nn.Module):
         x = torch.sigmoid(self.fc3(x))
         return x
 
+
+class Encoder(nn.Module):
+    def __init__(self, input_size = 28*28, hidden_size1 = 128, hidden_size2 =16, z_dim = 3):
+        super().__init__()
+        # self.fc1 = nn.Linear(input_size, hidden_size1)
+        # self.fc2 = nn.Linear(hidden_size1, hidden_size2)
+        # self.fc3 = nn.Linear(hidden_size1, z_dim)
+        # self.relu = nn.ReLU()
+        self.conv1 = nn.Conv2d(1, 32, stride=(1, 1), kernel_size=(3, 3), padding=1)
+        self.conv2 = nn.Conv2d(32, 64, stride=(2, 2), kernel_size=(3, 3), padding=1)
+        self.conv3 = nn.Conv2d(64, 64, stride=(2, 2), kernel_size=(3, 3), padding=1)
+        self.conv4 = nn.Conv2d(64, 64, stride=(1, 1), kernel_size=(3, 3), padding=1)
+        self.relu = nn.LeakyReLU(0.01)
+
+
+    def forward(self, x):
+        # x = self.relu(self.fc1(x))
+        # # x = self.relu(self.fc2(x))
+        # x = self.fc3(x)
+        x = self.conv1(x)
+        x = self.relu(x)
+        x = self.conv2(x)
+        x = self.relu(x)
+        x = self.conv3(x)
+        x = self.relu(x)
+        x = self.conv4(x)
+        x = nn.Flatten(x)
+        return x
+
+
+class Decoder(nn.Module):
+    def __init__(self, output_size=28 * 28, hidden_size1=128, hidden_size2=16, z_dim=3):
+        super().__init__()
+        # self.fc1 = nn.Linear(z_dim, hidden_size1)
+        # self.fc2 = nn.Linear(hidden_size2, hidden_size1)
+        # self.fc3 = nn.Linear(hidden_size1, output_size)
+        # self.relu = nn.ReLU()
+        self.ln = nn.Linear(3, 2136)
+        self.tconv1 = nn.ConvTranspose2d(64, 64, stride=(1, 1), kernel_size=(3, 3), padding=1)
+        self.tconv2 = nn.ConvTranspose2d(64, 64, stride=(2, 2), kernel_size=(3, 3), padding=1)
+        self.tconv3 = nn.ConvTranspose2d(64, 32, stride=(2, 2), kernel_size=(3, 3), padding=1)
+        self.tconv4 = nn.ConvTranspose2d(32, 1, stride=(1, 1), kernel_size=(3, 3), padding=1)
+        self.relu = nn.LeakyReLU(0.01)
+
+
+    def forward(self, x):
+        # x = self.relu(self.fc1(x))
+        # # x = self.relu(self.fc2(x))
+        # x = torch.sigmoid(self.fc3(x))
+        # return x
+        x = self.ln(x)
+        x = x.view(-1, 64, 7, 7)
+        x = self.tconv1(x)
+        x = self.relu(x)
+        x = self.tconv2(x)
+        x = self.relu(x)
+        x = self.tconv3(x)
+        x = self.relu(x)
+        x = self.tconv4(x)
+        x = x[:,:,:28,:28]
+        x = nn.Sigmoid(x)
+        return x
+
+
+class VAE(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.encoder = Encoder()
+        self.decoder = Decoder()
+        self.mean = nn.Linear(3136,2)
+        self.log_var = nn.Linear(3136,2)
+    def forward(self, x):
+        x = self.encoder(x)
+        z_mean, z_log_var = self.mean(x), self.log_var(x)
+        eps = torch.rand(z_mean.size(0), z_mean.size(1)).to(z_mean.get_device())
+        z = z_mean+eps*torch.exp(z_log_var/2.0)
+        result = self.decoder(z)
+        return x, z_mean, z_log_var, result
+
 plt.imshow(x_example[0,:], cmap='gray')
 plt.show()
 
