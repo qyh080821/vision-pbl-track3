@@ -1,0 +1,259 @@
+import torch.utils.data
+import torch.nn as nn
+import cv2
+import torchvision
+from matplotlib import pyplot as plt
+from torchvision import transforms
+import torch.nn.functional as F
+import numpy as np
+from tqdm import tqdm
+import os
+from kan.KAN import KAN
+from pathlib import Path as p
+
+import pickle
+mnist_data_train = torchvision.datasets.MNIST("./data", train=True,download=True, transform=transforms.ToTensor())
+mnist_data_test = torchvision.datasets.MNIST("./data", train=False, download=True, transform=transforms.ToTensor())
+
+x_train = torch.stack([x[0][0] for x in mnist_data_train])
+y_train = torch.tensor([x[1] for x in mnist_data_train])
+
+x_test = torch.stack([x[0][0] for x in mnist_data_test])
+y_test = torch.tensor([x[1] for x in mnist_data_test])
+
+def plot_and_save(a, file_path=''):
+    fig, ax = plt.subplots()
+    ax.plot(a)
+    if file_path:
+        fig.savefig(file_path)
+    plt.close(fig)
+
+
+def folder(path):
+    path.mkdir(exist_ok=True, parents=True)
+    return path
+
+
+def pickle_save(x, file):
+    with open(file, 'wb') as f:
+        pickle.dump(x, f, protocol=pickle.HIGHEST_PROTOCOL)
+    f.close()
+
+
+def pickle_load(file):
+    with open(file, 'rb') as f:
+        x = pickle.load(f)
+    f.close()
+    return x
+
+
+# image augmentation utils
+def find_bbox(img):
+    a = np.where(img != 0)
+    bbox = np.min(a[0]), np.max(a[0]), np.min(a[1]), np.max(a[1])
+    return bbox
+
+
+def crop_to_bbox(img):
+    '''Crop image to bounding box size'''
+    a = np.where(img != 0)
+    xmin, xmax, ymin, ymax = np.min(a[1]), np.max(a[1]), np.min(a[0]), np.max(a[0])
+    return np.copy(img[ymin:ymax, xmin:xmax])
+
+
+def place_in_canvas(canvas, img, i, j):
+    mask = img > 0
+    canvas[i:i + img.shape[0], j:j + img.shape[1]][mask] = img[mask]
+
+
+def apply_scaling(img, size=None):
+    fx = 2 ** (np.random.sample())
+    fy = 2 ** (np.random.sample())
+    if size is not None:
+        x, y = size
+        return cv2.resize(np.copy(img), size, interpolation=cv2.INTER_CUBIC)
+    return cv2.resize(np.copy(img), None, fx=fx, fy=fy, interpolation=cv2.INTER_CUBIC)
+
+def fit_to_screen(fig, k=60):
+    w, h = fig.get_size_inches()
+    fig.set_size_inches(w=k, h=k*h/w)
+    return fig
+
+def imshow_with_bbox(img, boxes, labels):
+    '''
+    img: tensor[n, c, h, w]
+    boxes: list[n] of tensor[n_object, 4] *in fractional coordinate*
+    labels: list[n] of tensor[1]
+    '''
+    n_img = len(labels)
+    img = img.squeeze().cpu().numpy()
+    h = img.shape[-2]
+    w = img.shape[-1]
+
+    fig, ax = plt.subplots(1, n_img)
+    for i in range(n_img):
+        ax[i].imshow(img[i])
+        ax[i].axis('off')
+        n_objects = len(boxes[i])
+        for j in range(n_objects):
+            box = (boxes[i][j].cpu() * torch.tensor([h, w, h, w])).tolist()  # rescale from frac. coord to pixel coord
+            ax[i].hlines(box[0], box[1], box[3], colors='w')
+            ax[i].vlines(box[1], box[0], box[2], colors='w')
+            ax[i].hlines(box[2], box[1], box[3], colors='w')
+            ax[i].vlines(box[3], box[0], box[2], colors='w')
+            ax[i].text(box[1], box[0], str(int(labels[i][j])), color='w', size=20)
+
+    fig = fit_to_screen(fig)
+    return fig
+
+def s(img):
+    plt.imshow(img)
+    plt.show()
+
+h, w = 32, 32
+n_generate = 16000
+n_singles = len(x_train)
+
+k = 0
+images = []  # size [n, h,w]
+boxes = []  # size [n, n_object, 4] (n_object is different for each sample)
+labels = []  # [n, n_object]
+for idx in tqdm(range(n_generate)):
+    canvas = np.zeros((h, w), dtype=np.float64)  # each canvas is an image in the object detection dataset
+    boxes_tmp = []
+    labels_tmp = []
+
+    for i in range(0, h,
+                   25):  # 25 because it produces good spacing between digits in the same image. This is experimented.
+        for j in range(0, w, 25):
+            if k == 0:
+                permuted_idx = np.random.permutation(range(n_singles))
+                x_train_permuted = x_train[permuted_idx]
+                y_train_permuted = y_train[permuted_idx]
+
+            yes = np.random.rand()
+            if yes <= 0.8:
+                # add a singleton image to the canvas
+                img = x_train_permuted[k]
+                img = apply_scaling(img, size=(np.random.randint(15, 28), np.random.randint(15, 28)))
+                img = crop_to_bbox(img)
+                # topleft coord
+                tl_i = i + np.random.randint(0, 5)
+                tl_j = j + np.random.randint(0, 5)
+                if tl_i + img.shape[0] >= h:
+                    tl_i = h - 1 - img.shape[0]
+                if tl_j + img.shape[1] >= w:
+                    tl_j = w - 1 - img.shape[1]
+
+                place_in_canvas(canvas, img, tl_i, tl_j)
+
+                boxes_tmp.append([tl_i, tl_j, tl_i + img.shape[0], tl_j + img.shape[1]])
+                labels_tmp.append(y_train_permuted[k])
+                k = (k + 1) % n_singles
+
+    if len(boxes_tmp) == 0:  # if the canvas is still empty, add a digit to it at random location
+        img = x_train_permuted[k]
+        img = apply_scaling(img, size=(np.random.randint(15, 28), np.random.randint(15, 28)))
+        img = crop_to_bbox(img)
+        tl_i = np.random.randint(0, h)
+        tl_j = np.random.randint(0, w)
+        if tl_i + img.shape[0] >= h:
+            tl_i = h - 1 - img.shape[0]
+        if tl_j + img.shape[1] >= w:
+            tl_j = w - 1 - img.shape[1]
+
+        place_in_canvas(canvas, img, tl_i, tl_j)
+
+        boxes_tmp.append([tl_i, tl_j, tl_i + img.shape[0], tl_j + img.shape[1]])
+        labels_tmp.append(y_train_permuted[k])
+        k = (k + 1) % n_singles
+
+    images.append(canvas)
+    boxes.append(boxes_tmp)
+    labels.append(labels_tmp)
+assert 0 not in list(map(len, boxes))
+pickle_save((images, boxes, labels), p.cwd()/'data/train.pkl')
+
+##############################test
+##############################test
+##############################test
+##############################test
+
+# output: an np array size [h,w] containing several images in x_train
+
+h, w = 32, 32
+n_generate = 2500
+n_singles = len(x_test)
+
+k = 0
+images = []  # size [n, h,w]
+boxes = []  # size [n, n_object, 4] (n_object is different for each sample)
+labels = []  # [n, n_object]
+for idx in tqdm(range(n_generate)):
+    canvas = np.zeros((h, w), dtype=np.uint8)
+    boxes_tmp = []
+    labels_tmp = []
+
+    for i in range(0, h, 25):  # 25 because it produces good spacing between digits in the same image
+        for j in range(0, w, 25):
+            if k == 0:
+                permuted_idx = np.random.permutation(range(n_singles))
+                x_test_permuted = x_test[permuted_idx]
+                y_test_permuted = y_test[permuted_idx]
+
+            yes = np.random.rand()
+            if yes <= 0.8:
+                img = x_test_permuted[k]
+                img = apply_scaling(img, size=(np.random.randint(15, 28), np.random.randint(15, 28)))
+                img = crop_to_bbox(img)
+                # topleft coord
+                tl_i = i + np.random.randint(0, 5)
+                tl_j = j + np.random.randint(0, 5)
+                if tl_i + img.shape[0] >= h:
+                    tl_i = h - 1 - img.shape[0]
+                if tl_j + img.shape[1] >= w:
+                    tl_j = w - 1 - img.shape[1]
+
+                place_in_canvas(canvas, img, tl_i, tl_j)
+
+                boxes_tmp.append([tl_i, tl_j, tl_i + img.shape[0], tl_j + img.shape[1]])
+                labels_tmp.append(y_test_permuted[k])
+                k = (k + 1) % n_singles
+
+    if len(boxes_tmp) == 0:  # if the canvas is still empty, add a digit to it at random location
+        img = x_test_permuted[k]
+        img = apply_scaling(img, size=(np.random.randint(15, 28), np.random.randint(15, 28)))
+        img = crop_to_bbox(img)
+        tl_i = np.random.randint(0, h)
+        tl_j = np.random.randint(0, w)
+        if tl_i + img.shape[0] >= h:
+            tl_i = h - 1 - img.shape[0]
+        if tl_j + img.shape[1] >= w:
+            tl_j = w - 1 - img.shape[1]
+
+        place_in_canvas(canvas, img, tl_i, tl_j)
+
+        boxes_tmp.append([tl_i, tl_j, tl_i + img.shape[0], tl_j + img.shape[1]])
+        labels_tmp.append(y_test_permuted[k])
+        k = (k + 1) % n_singles
+
+    images.append(canvas)
+    boxes.append(boxes_tmp)
+    labels.append(labels_tmp)
+assert 0 not in list(map(len, boxes))
+pickle_save((images, boxes, labels), p.cwd()/'data/test.pkl')
+##################################test
+##############################test##############################test
+##############################test
+##############################test
+
+
+n = 5
+#prepare image, box, label to fit into function imshow_with_bbox. This is also done in the class MyDataset
+img = torch.tensor(images[:n]).unsqueeze(1)
+b = [torch.tensor(boxes[i], dtype=torch.float)/h for i in range(n)]
+l = [torch.tensor(labels[i]) for i in range(n)]
+_ = imshow_with_bbox(img, b, l)
+boxes[:5]
+labels[:5]
+
