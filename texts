@@ -1,0 +1,17 @@
+Single Shot Multibox Detector with KAN 
+Motivation
+
+Recently, KAN(Kolmogorov-Arnold Network) inspired by the Kolmogorov-Arnold representation theorem
+has came out which is an alternatives to MLP(Multi-Layer Perceptrons) and it outperform MLPs 
+in terms of accuracy and interpretability in some tasks.
+
+More and more kinds of KAN-based networks has been implemented such as Convolutional KAN, ViT-KAN.
+
+SSD(Single Shot Multibox Detection) is a good one-stage object-detection method with many Conv2D layers,
+which can be replaced by KAN-Conv to test whether KAN will perform similar or better.
+
+Dataset and Features
+
+Raw Data:
+32x32 1 channel pictures with 80%  random Mnist numbers, randomly scaled width and height from 15 to 28.
+
