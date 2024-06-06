@@ -1,0 +1,139 @@
+import torch.utils.data
+import torch.nn as nn
+import torchvision
+from matplotlib import pyplot as plt
+from torchvision import transforms
+import torch.nn.functional as F
+import numpy as np
+import torchvision.transforms as transforms
+transform = transforms.Compose([
+    transforms.ToTensor()
+])
+import pickle
+from efficient_kan.kan import KAN
+
+# f = open("./data/train.pkl", "rb")
+# a, _, _ = pickle.load(f)
+# train_dl = torch.stack([transform(x) for x in a])
+mnist_data_train = torchvision.datasets.MNIST("./", train=True,download=False, transform=transforms.ToTensor())
+train_dl = torch.utils.data.DataLoader(mnist_data_train, batch_size=100)
+def show_data(X, n=10, height=28, width=28, title=""):
+    plt.figure(figsize=(10, 3))
+    for i in range(n):
+        ax = plt.subplot(2,n,i+1)
+        plt.imshow(X[i].reshape((height,width)))
+        plt.gray()
+        ax.get_xaxis().set_visible(False)
+        ax.get_yaxis().set_visible(False)
+    plt.suptitle(title, fontsize = 20)
+
+
+class VAE0(nn.Module):
+    def __init__(self, input_dim=784, h_dim=400, z_dim=20):
+        super(VAE0, self).__init__()
+
+        self.input_dim = input_dim
+        # self.h_dim = h_dim
+        # self.z_dim = z_dim
+        self.kan1 = KAN([input_dim, h_dim, z_dim])
+        self.kan2 = KAN([input_dim, h_dim, z_dim])
+        self.fc1 = nn.Linear(input_dim, h_dim)
+
+        self.fc2 = nn.Linear(h_dim, z_dim)
+        self.fc3 = nn.Linear(h_dim, z_dim)
+
+        self.fc4 = nn.Linear(z_dim, h_dim)
+
+        self.fc5 = nn.Linear(h_dim, input_dim)
+        self.kan3 = KAN([z_dim, h_dim, input_dim])
+    def encode(self, x):
+        # h = F.relu(self.fc1(x))
+
+        # mu = self.fc2(h)
+        # log_var = self.fc3(h)
+        mu = self.kan1(x)
+        log_var = self.kan2(x)
+        return mu, log_var
+
+    def reparameterization(self, mu, log_var):
+        sigma = torch.exp(log_var * 0.5)
+        eps = torch.randn_like(sigma)
+        return mu + sigma * eps
+
+    def decode(self, z):
+        # h = F.relu(self.fc4(z))
+
+        # x_hat = torch.sigmoid(self.fc5(h))
+        x_hat = self.kan3(z)
+        x_hat = torch.sigmoid(x_hat)
+        return x_hat
+
+    def forward(self, x):
+        batch_size = x.shape[0]
+        x = x.view(batch_size, self.input_dim)
+
+        mu, log_var = self.encode(x)
+        sampled_z = self.reparameterization(mu, log_var)
+        x_hat = self.decode(sampled_z)
+        x_hat = x_hat.view(batch_size, 1, 28, 28)
+        return x_hat, mu, log_var
+def loss_fn(x_hat, x, mu, log_var):
+    """
+    Calculate the loss. Note that the loss includes two parts.
+    :param x_hat:
+    :param x:
+    :param mu:
+    :param log_var:
+    :return: total loss, BCE and KLD of our model
+    """
+
+    BCE = F.binary_cross_entropy(x_hat.view(100,-1), x, reduction='sum') #计算x_hat和x的交叉熵
+
+    KLD = -0.5 * torch.sum(1-torch.exp(log_var) -torch.pow(mu, 2)  + log_var) #tensor 张量：本质是一个多维数组，用来创造高维矩阵、向量
+
+    loss = BCE + KLD
+    return loss, BCE, KLD
+
+model = VAE0()
+opt = torch.optim.Adam(model.parameters(), lr=0.002  )
+
+train_loss = []
+for epoch in range(20):
+    train_epoch_loss = []
+    index = 0
+    for (img, _) in train_dl:
+        img2 = img.view(img.shape[0], -1)
+        # img2 = img.view(100, -1)
+        # img2 = img
+        # latents = enc(img2)
+        # output = dec(latents)
+        # loss = loss_fn(output, img2)
+
+        # output, mu, log_var, mu2, log_var2 = model(img2)
+        # print(index, epoch)
+        output, mu, log_var = model(img2)
+        loss, BCE, KLD = loss_fn(output, img2, mu, log_var)
+        # loss, BCE, KLD, KLD2 = loss_fn3(output, img2, mu, log_var, mu2, log_var2)
+        # loss, BCE, KLD = loss_fn2(output, img2, mu, log_var, mu2, log_var2)
+        # train_epoch_loss += loss.cpu().detach().numpy()
+        train_epoch_loss.append(loss.item()/100)
+        # optimizer_enc.zero_grad()
+        # optimizer_dec.zero_grad()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        # optimizer_enc.step()
+        # optimizer_dec.step()
+        if (index + 1) % 100 == 0:
+            print('Epoch [{}/{}], Batch [{}/{}] : Total-loss = {:.4f}, BCE-Loss = {:.4f}, KLD-loss = {:.4f}'
+                  .format(epoch + 1, 20, index + 1, len(train_dl.dataset) // 100,
+                          loss.item() / 100, BCE.item() / 100,
+                          KLD.item() / 100))
+            # print('Epoch [{}/{}], Batch [{}/{}] : Total-loss = {:.4f}, BCE-Loss = {:.4f}, KLD-loss = {:.4f},KLD2-loss = {:.4f}'
+            #       .format(epoch + 1, 20, index + 1, len(train_dl.dataset) // 100,
+            #               loss.item() / 100, BCE.item() / 100,
+            #               KLD.item() / 100, KLD2.item()/100))
+        index += 1
+    # train_loss.append(train_epoch_loss)
+    # print(epoch, train_epoch_loss)
+    train_loss.append(np.sum(train_epoch_loss) / len(train_dl))
