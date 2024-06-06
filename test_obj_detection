@@ -5,7 +5,8 @@ import numpy as np
 import utils
 import importlib
 from tqdm import tqdm
-
+from kan_convolutional.KANConv import KAN_Convolutional_Layer
+from kan_convolutional.KANLinear import KANLinear
 importlib.reload(utils)
 
 import matplotlib.pyplot as plt
@@ -118,17 +119,49 @@ def pretty_print_module_list(module_list, x, print_net=True):
 
 
 # ========================conv======================
+
 class Conv(nn.Module):
     def __init__(self, inC, outC, kernel_size=3, padding=1, stride=1, groups=1, spectral=False):
         super(Conv, self).__init__()
+
+        self.inC = inC
+        self.outC = outC
         if spectral:
             self.conv = spectral_norm(
                 nn.Conv3d(inC, outC, kernel_size=kernel_size, padding=padding, stride=stride, groups=groups))
         else:
+
+            # self.conv = KAN_Convolutional_Layer(outC, kernel_size=(kernel_size, kernel_size)
+            #                                     , padding=(padding, padding), stride=(stride, stride))
             self.conv = basic_conv(inC, outC, kernel_size=kernel_size, padding=padding, stride=stride, groups=groups)
+
 
     def forward(self, x):
         x = self.conv(x)
+        # if self.inC > 1:
+        #     x = x.chunk(self.inC, dim = -3)
+        #     x = sum(x)
+        return x
+
+class Conv2(nn.Module):
+    def __init__(self, inC, outC, kernel_size=3, padding=1, stride=1, groups=1, spectral=False):
+        super(Conv2, self).__init__()
+
+        self.inC = inC
+        self.outC = outC
+        if spectral:
+            self.conv = spectral_norm(
+                nn.Conv3d(inC, outC, kernel_size=kernel_size, padding=padding, stride=stride, groups=groups))
+        else:
+
+            self.conv = KAN_Convolutional_Layer(outC, kernel_size=(kernel_size, kernel_size)
+                                                , padding=(padding, padding), stride=(stride, stride))
+
+    def forward(self, x):
+        x = self.conv(x)
+        # if self.inC > 1:
+        #     x = x.chunk(self.inC, dim = -3)
+        #     x = sum(x)
         return x
 
 
@@ -201,15 +234,27 @@ class BaseConv(nn.Module):
         for i in range(len(conv_layers) - 1):
             if input_size % 2 == 1:
                 self.module_list.append(Pad_to_even_size())
-            self.module_list.extend([
-                conv(inC=conv_layers[i], outC=conv_layers[i + 1], spectral=spectral),
-                norm(conv_layers[i + 1]),
-                act_fn,
-                conv(inC=conv_layers[i + 1], outC=conv_layers[i + 1], spectral=spectral),
-                norm(conv_layers[i + 1]),
-                act_fn,
-                nn.MaxPool2d(kernel_size=2)]
-            )
+            if i != 0:
+                self.module_list.extend([
+                    conv(inC=conv_layers[i], outC=conv_layers[i + 1], spectral=spectral),
+                    norm(conv_layers[i + 1]),
+                    act_fn,
+                    conv(inC=conv_layers[i + 1], outC=conv_layers[i + 1], spectral=spectral),
+                    norm(conv_layers[i + 1]),
+                    act_fn,
+                    nn.MaxPool2d(kernel_size=2)]
+                )
+            else:
+                self.module_list.extend([
+                    Conv2(inC=conv_layers[i], outC=conv_layers[i + 1], spectral=spectral),
+                    norm(conv_layers[i + 1]),
+                    # act_fn,
+                    conv(inC=conv_layers[i + 1], outC=conv_layers[i + 1], spectral=spectral),
+                    norm(conv_layers[i + 1]),
+                    act_fn,
+                    nn.MaxPool2d(kernel_size=2)]
+                )
+
             input_size = np.ceil(input_size / 2)
 
             # select feature maps for prediction. They are the output of act_fn right before maxpool layers
@@ -248,13 +293,22 @@ class AuxConv(nn.Module):
         self.module_list = nn.ModuleList()
         self.fm_id = []
         for i in range(len(conv_layers) - 1):
-            self.module_list.extend(
-                [conv(conv_layers[i], conv_layers[i] // 2, kernel_size=1, padding=0, spectral=spectral),
-                 norm(conv_layers[i] // 2),
-                 act_fn,
-                 conv(conv_layers[i] // 2, conv_layers[i + 1], kernel_size=3, padding=1, stride=2, spectral=spectral),
-                 norm(conv_layers[i + 1]),
-                 act_fn])
+            if i != len(conv_layers) - 1:
+                self.module_list.extend(
+                    [conv(conv_layers[i], conv_layers[i] // 2, kernel_size=1, padding=0, spectral=spectral),
+                     norm(conv_layers[i] // 2),
+                     act_fn,
+                     conv(conv_layers[i] // 2, conv_layers[i + 1], kernel_size=3, padding=1, stride=2, spectral=spectral),
+                     norm(conv_layers[i + 1]),
+                     act_fn])
+            else:
+                self.module_list.extend(
+                    [conv(conv_layers[i], conv_layers[i] // 2, kernel_size=1, padding=0, spectral=spectral),
+                     norm(conv_layers[i] // 2),
+                     act_fn,
+                     Conv2(conv_layers[i] // 2, conv_layers[i + 1], kernel_size=3, padding=1, stride=2, spectral=spectral),
+                     norm(conv_layers[i + 1])])
+
             self.fm_id.append(len(self.module_list) - 1)
 
     def forward(self, x):
@@ -277,6 +331,7 @@ class PredictionConv(nn.Module):
             self.loc_module_list.append(nn.Sequential(norm(fm_channels[i]),
                                                       nn.Conv2d(fm_channels[i], n_prior_per_pixel[i] * 4, kernel_size=3,
                                                                 padding=1)))
+
 
         # prediction conv out layers
         self.cla_module_list = nn.ModuleList()
@@ -541,7 +596,7 @@ config['n_prior_per_pixel'] = [len(i)+1 for i in config['fm_prior_aspect_ratio']
 
 # training config
 config['checkpoint'] = ''#output_folder/'checkpoint.pth'
-config['n_epoch'] = 60
+config['n_epoch'] = 2
 config['save_frequency'] = 20
 config['MultiStepLR_milestones'] = list(range(20, config['n_epoch'], 10))
 config['gamma'] = 0.5
